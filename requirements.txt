@@ -3,3 +3,6 @@ pygame
 faster-whisper
 sounddevice
 numpy
+pvporcupine
+pyaudio
+python-dotenv

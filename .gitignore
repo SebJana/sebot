@@ -1,1 +1,8 @@
+# Ignore all whisper model files and folders
 /whisper-models
+
+# Ignore environment variable files
+.env
+
+# Ignore Porcupine model files only in porcupine-model directory
+porcupine-model/*.ppn
