@@ -7,7 +7,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-system_prompt = '''
+router_system_prompt = '''
 You are an assistant router. For each user request:
 
 1. Correct any obvious grammar or spelling mistakes.
@@ -17,6 +17,7 @@ You are an assistant router. For each user request:
    - chat: casual conversation, jokes, greetings
    - question: factual questions, general knowledge
    - web_search: current events, unknown facts, real-time information
+   - web_search_with_wiki: topics where Wikipedia is likely a strong primary source
    - translation: translating text between languages
    - reminder: timers, alarms, calendar events
    - media_control: playing music, videos, podcasts
@@ -40,6 +41,9 @@ Output in strict JSON (no extra text):
 Rules:
 - Only modify "corrected_text" if needed; otherwise use "unchanged".
 - Use "web_search" intent if the request requires looking up current or unknown information.
+- For "web_search" let the description be the prompt to web search the needed information, so don't add "find", just the actual search    prompt.
+- Decide whether a Wikipedia search would be beneficial.
+- Properly evaluate if a web search is needed or if the LLM itself contains that information in it's knowledge.
 - Always respond in valid JSON only. Do not include any commentary or additional fields.
 '''
 
@@ -49,7 +53,7 @@ def classification(prompt: str):
     response = client.responses.create(
         model="gpt-5-nano",
         input=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": router_system_prompt},
             {"role": "user", "content": prompt}
         ]
     )

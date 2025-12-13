@@ -1,12 +1,16 @@
 import threading
 import time
 from streaming_stt import WhisperModel, WakeWordActivation, StreamingSTT
-from src.ai_api import classification
+from ai_api import classification
+from web_search import run_web_search
 import json
 
-def main():
-    # Load the model once
-    whisper_model_size = "small"
+
+def setup_services(whisper_model_size: str = "small"):
+    """Initialize and return (whisper_model, stt, activator, stt_thread).
+
+    The caller is responsible for starting/stopping threads and activator.
+    """
     whisper_model = WhisperModel(
         f"Systran/faster-whisper-{whisper_model_size}",
         device="cpu",
@@ -15,42 +19,74 @@ def main():
     stt = StreamingSTT(model=whisper_model)
     activator = WakeWordActivation()
     stt_thread = threading.Thread(target=stt.start_stream, daemon=True)
+    return stt, activator, stt_thread
+
+
+def process_queue_message(msg: str, stt: StreamingSTT):
+    """Process a single transcribed message from the queue.
+
+    Returns True if processing completed and the caller should stop recording.
+    """
+    print("\n" + "=" * 50)
+    print("[QUEUE] Message received:")
+    print("[QUEUE MESSAGE]", msg)
+    try:
+        result = classification(msg)
+        try:
+            parsed = json.loads(result)
+            print("[CLASSIFICATION]", json.dumps(parsed, indent=2, ensure_ascii=False))
+
+            web_search_output = run_web_search(parsed)
+            if isinstance(parsed, dict):
+                intent = parsed.get("intent") or {}
+                category = intent.get("category")
+                # Only run web_search if desired
+                if category == "web_search" or category == "web_search_with_wiki":
+                    prompt = intent.get("description")
+                    web_search_output = run_web_search(prompt, category)
+                    # Print a short summary of results
+                    print("[WEB SEARCH PROMPT]", web_search_output.get("prompt"))
+                    print("[WIKI EXCERPT]", web_search_output.get("wiki"))
+                    print("[RESULTS]", "\n".join(web_search_output.get("results", [])))
+        except Exception:
+            # If not valid JSON, just print raw
+            print("[CLASSIFICATION RAW]", result)
+    except Exception as e:
+        print("[CLASSIFICATION ERROR]", str(e))
+    print("=" * 50 + "\n")
+    stt.is_recording = False
+    return True
+
+
+def main():
+    # Setup services and start background threads
+    stt, activator, stt_thread = setup_services()
     stt_thread.start()
+
     try:
         while True:
             activator.wait_for_wake()
             print("Starting transcription. Speak into your microphone...")
-            stt.is_recording = True # Activate the transcription via flag
+            stt.is_recording = True  # Activate the transcription via flag
+
             # Update the last speech times to now
             now = time.time()
             stt.last_speech_time = now
             stt.last_chunk_time = now
-            while True:
-                try:
+
+            # Wait for the transcribed message to appear in the queue
+            try:
+                while True:
                     time.sleep(0.05)
                     if stt.full_message_queue:
                         msg = stt.full_message_queue.popleft()
-                        print("\n" + "=" * 50)
-                        print("[QUEUE] Message received:")
-                        print("[QUEUE MESSAGE]", msg)
-                        try:
-                            result = classification(msg)
-                            try:
-                                parsed = json.loads(result)
-                                print("[CLASSIFICATION]", json.dumps(parsed, indent=2, ensure_ascii=False))
-                            except Exception:
-                                # If not valid JSON, just print raw
-                                print("[CLASSIFICATION RAW]", result)
-                        except Exception as e:
-                            print("[CLASSIFICATION ERROR]", str(e))
-                        print("=" * 50 + "\n")
-                        stt.is_recording = False
+                        # Process the message and stop recording afterwards
+                        process_queue_message(msg, stt)
                         break
-                except KeyboardInterrupt:
-                    print("Stopping transcription after next wake word...")
-                    stt.is_recording = False
-                    # After breaking, will return to wait_for_wake, then exit
-                    raise
+            except KeyboardInterrupt:
+                print("Stopping transcription after next wake word...")
+                stt.is_recording = False
+                raise
     except KeyboardInterrupt:
         print("Stopping transcription...")
     finally:

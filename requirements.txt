@@ -7,3 +7,5 @@ pvporcupine
 pyaudio
 python-dotenv
 openai
+ddgs
+wikipedia
