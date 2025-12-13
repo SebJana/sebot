@@ -1,2 +1,5 @@
 piper-tts
 pygame
+faster-whisper
+sounddevice
+numpy
