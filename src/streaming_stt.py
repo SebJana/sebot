@@ -14,6 +14,7 @@ load_dotenv()
 
 # TODO input audio into the file from the outside (so it is able to run in docker)
 # Wake word gate using Porcupine
+# Upon not speaking to at start keep listening for X seconds till abort, dont go into long pause and end 
 class WakeWordActivation:
     """
     Listens for the Porcupine wake word in a background thread and sets a flag when detected.
@@ -27,9 +28,9 @@ class WakeWordActivation:
     def _listen(self):
         ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY", "")
         MODEL_FILE_NAME = os.getenv("POCCUPINE_MODEL_FILE_NAME", "hey_atlas.ppn")
-        
+
         # NOTE current wake word is: "Hey Atlas"
-        model_path = f"porcupine-model/{MODEL_FILE_NAME}"
+        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "porcupine-model", MODEL_FILE_NAME)
         porcupine = pvporcupine.create(
             access_key=ACCESS_KEY,
             keyword_paths=[model_path],
@@ -310,49 +311,3 @@ class StreamingSTT:
         ):
             while True:
                 time.sleep(0.1)
-
-def main():
-    # Load the model once
-    whisper_model_size = "small"
-    whisper_model = WhisperModel(
-        f"whisper-models/models--Systran--faster-whisper-{whisper_model_size}",
-        device="cpu",
-        compute_type="int8"
-    )
-    stt = StreamingSTT(model=whisper_model)
-    activator = WakeWordActivation()
-    stt_thread = threading.Thread(target=stt.start_stream, daemon=True)
-    stt_thread.start()
-    try:
-        while True:
-            activator.wait_for_wake()
-            print("Starting transcription. Speak into your microphone...")
-            stt.is_recording = True # Activate the transcription via flag
-            # Update the last speech times to now
-            now = time.time()
-            stt.last_speech_time = now
-            stt.last_chunk_time = now
-            while True:
-                try:
-                    time.sleep(0.05)
-                    if stt.full_message_queue:
-                        msg = stt.full_message_queue.popleft()
-                        print("\n" + "=" * 50)
-                        print("[QUEUE] Message received:")
-                        print("[QUEUE MESSAGE]", msg)
-                        print("=" * 50 + "\n")
-                        stt.is_recording = False
-                        break
-                except KeyboardInterrupt:
-                    print("Stopping transcription after next wake word...")
-                    stt.is_recording = False
-                    # After breaking, will return to wait_for_wake, then exit
-                    raise
-    except KeyboardInterrupt:
-        print("Stopping transcription...")
-    finally:
-        activator.stop()
-
-
-if __name__ == "__main__":
-    main()
