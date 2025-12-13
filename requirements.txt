@@ -6,3 +6,4 @@ numpy
 pvporcupine
 pyaudio
 python-dotenv
+openai

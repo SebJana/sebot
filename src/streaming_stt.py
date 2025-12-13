@@ -27,7 +27,7 @@ class WakeWordActivation:
 
     def _listen(self):
         ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY", "")
-        MODEL_FILE_NAME = os.getenv("POCCUPINE_MODEL_FILE_NAME", "hey_atlas.ppn")
+        MODEL_FILE_NAME = os.getenv("POCCUPINE_MODEL_FILE_NAME", "")
 
         # NOTE current wake word is: "Hey Atlas"
         model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "porcupine-model", MODEL_FILE_NAME)

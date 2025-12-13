@@ -1,6 +1,8 @@
 import threading
 import time
 from streaming_stt import WhisperModel, WakeWordActivation, StreamingSTT
+from src.ai_api import classification
+import json
 
 def main():
     # Load the model once
@@ -31,6 +33,16 @@ def main():
                         print("\n" + "=" * 50)
                         print("[QUEUE] Message received:")
                         print("[QUEUE MESSAGE]", msg)
+                        try:
+                            result = classification(msg)
+                            try:
+                                parsed = json.loads(result)
+                                print("[CLASSIFICATION]", json.dumps(parsed, indent=2, ensure_ascii=False))
+                            except Exception:
+                                # If not valid JSON, just print raw
+                                print("[CLASSIFICATION RAW]", result)
+                        except Exception as e:
+                            print("[CLASSIFICATION ERROR]", str(e))
                         print("=" * 50 + "\n")
                         stt.is_recording = False
                         break
