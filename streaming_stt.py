@@ -146,8 +146,8 @@ class StreamingSTT:
             segments, _ = self.model.transcribe(
                 audio_data,
                 beam_size=1,
-                best_of=1,
-                temperature=0.0,
+                best_of=3,
+                temperature=0.2,
                 vad_filter=False,
                 condition_on_previous_text=False,
                 no_speech_threshold=0.6,
