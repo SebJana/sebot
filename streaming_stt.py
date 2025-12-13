@@ -1,28 +1,90 @@
-"""
-StreamingSTT: Real-time streaming speech-to-text (STT) using Whisper.
-See 'simple_streaming_stt_README.py' for an overview and usage details.
-"""
-
 import sounddevice as sd
 import numpy as np
 from faster_whisper import WhisperModel
 import threading
 import time
 from collections import deque
+import os
+import pvporcupine
+import pyaudio
+import struct
+from dotenv import load_dotenv
+load_dotenv()
 
 
-# TODO implement wake on word library, to start recording via "Hey Sebot"
+# TODO input audio into the file from the outside (so it is able to run in docker)
+# Wake word gate using Porcupine
+class WakeWordActivation:
+    """
+    Listens for the Porcupine wake word in a background thread and sets a flag when detected.
+    """
+    def __init__(self):
+        self.detected = threading.Event()
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._listen, daemon=True)
+        self.thread.start()
+
+    def _listen(self):
+        ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY", "")
+        MODEL_FILE_NAME = os.getenv("POCCUPINE_MODEL_FILE_NAME", "hey_atlas.ppn")
+        
+        # NOTE current wake word is: "Hey Atlas"
+        model_path = f"porcupine-model/{MODEL_FILE_NAME}"
+        porcupine = pvporcupine.create(
+            access_key=ACCESS_KEY,
+            keyword_paths=[model_path],
+            sensitivities=[0.6]
+        )
+        pa = pyaudio.PyAudio()
+        stream = pa.open(
+            rate=porcupine.sample_rate,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=porcupine.frame_length
+        )
+        print("Listening for wake word...")
+        try:
+            while not self._stop.is_set():
+                pcm = stream.read(
+                    porcupine.frame_length,
+                    exception_on_overflow=False
+                )
+                pcm = struct.unpack_from(
+                    "h" * porcupine.frame_length,
+                    pcm
+                )
+                keyword_index = porcupine.process(pcm)
+                if keyword_index >= 0:
+                    print("Wake word detected! Listening...")
+                    self.detected.set()
+                    self.detected.wait()
+                    self.detected.clear()
+        finally:
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            porcupine.delete()
+
+    def wait_for_wake(self):
+        self.detected.wait()
+        
+    def reset(self):
+        self.detected.set()
+
+    def stop(self):
+        self._stop.set()
+        self.thread.join()
+
 class StreamingSTT:
-    def __init__(self, model_size="small"):
+    def __init__(self, model):
         """
         Streaming speech-to-text (STT) with real-time partial and final message output.
         Loads a Whisper model and sets up audio streaming parameters.
         """
-
-        # Load the Whisper model for transcription. Model size can be 'tiny', 'small', etc.
-        self.model_path = f"whisper-models/models--Systran--faster-whisper-{model_size}"
-        self.model = WhisperModel(self.model_path, device="cpu", compute_type="int8")
-
+        if model is not None:
+            self.model = model
+            
         # Audio stream parameters
         self.SAMPLERATE = 16000
         self.CHUNK_DURATION = 0.5  # seconds per audio chunk
@@ -31,7 +93,6 @@ class StreamingSTT:
         # Buffer for incoming audio chunks (for partial transcription)
         self.current_buffer = deque()
         # Lock to ensure thread-safe access to the buffer
-
         self.buffer_lock = threading.Lock()
         # List of partial transcriptions (strings)
         self.partials = []
@@ -39,12 +100,14 @@ class StreamingSTT:
         self.last_partial_index = 0
 
         # Silence and timing thresholds
-        self.silence_threshold = 0.008  # TODO: Adapt to environment and mic sensitivity
+        # TODO: Adapt to environment and mic sensitivity (How?) 
+        # Capture and pre-process audio in Rust and send it to container/this file?
+        self.silence_threshold = 0.004
         self.min_audio_length = (
             0.5  # Minimum audio length (seconds) for valid transcription
         )
-        self.short_silence_duration = 0.3  # Short pause (seconds) triggers partial message transcription
-        self.long_silence_duration = 1.5  # Long pause (seconds) triggers final message
+        self.short_silence_duration = 0.5  # Short pause (seconds) triggers partial message transcription
+        self.long_silence_duration = 1.25  # Long pause (seconds) triggers final message
 
         # State variables for speech detection and timing
         self.is_recording = False
@@ -57,7 +120,7 @@ class StreamingSTT:
         self.partial_threads_lock = threading.Lock()
 
         # Queue for full messages (max 10 to prevent unbounded growth, meaning last 10 prompts)
-        self.full_message_queue = deque(maxlen=10)
+        self.full_message_queue = deque(maxlen=20)
 
     def detect_voice_activity(self, audio_chunk):
         """
@@ -83,10 +146,15 @@ class StreamingSTT:
             segments, _ = self.model.transcribe(
                 audio_data,
                 beam_size=1,
-                best_of=3,
+                best_of=1,
                 temperature=0.0,
                 vad_filter=False,
-                language=None,  # Let model decide which language its picking up
+                condition_on_previous_text=False,
+                no_speech_threshold=0.6,
+                # TODO fix language to english for better performance?
+                # German is being translated, but what is the accuracy like?
+                # Rather have slower but accurate answers with sebot
+                language="en",  # Let model decide which language its picking up
             )
             # Join all non-empty segment texts
             return " ".join(seg.text.strip() for seg in segments if seg.text.strip())
@@ -161,71 +229,71 @@ class StreamingSTT:
         if status:
             print(status)
 
-        # Extract mono audio from input and convert to float32
-        audio_chunk = indata[:, 0].astype(np.float32)
+        audio_chunk = self._extract_audio_chunk(indata)
         current_time = time.time()
-        has_speech = self.detect_voice_activity(audio_chunk)
+        if not self.is_recording:
+            return
 
-        if has_speech:
-            # Start recording if speech detected
-            if not self.is_recording:
-                self.is_recording = True
-            # Append chunk to buffer (thread-safe)
-            with self.buffer_lock:
-                self.current_buffer.append(audio_chunk)
-            self.last_speech_time = current_time
-            self.last_chunk_time = current_time
+        if self.detect_voice_activity(audio_chunk):
+            self._handle_speech_detected(audio_chunk, current_time)
         else:
-            # If not currently recording, ignore silence
-            if not self.is_recording:
-                return
+            self._handle_silence(current_time)
 
-            # Calculate time since last chunk and last speech
-            chunk_time = current_time - self.last_chunk_time
-            silence_time = current_time - self.last_speech_time
+    def _extract_audio_chunk(self, indata):
+        """Extract mono audio from input and convert to float32."""
+        return indata[:, 0].astype(np.float32)
 
-            # Short pause: process a partial (non-blocking, keeps UI responsive)
-            if (
-                chunk_time > self.short_silence_duration
-                and len(self.current_buffer) > 0
-            ):
-                self.safe_process_current_buffer()
-                self.last_chunk_time = current_time
+    def _handle_speech_detected(self, audio_chunk, current_time):
+        """Handle logic when speech is detected in the audio chunk."""
+        with self.buffer_lock:
+            self.current_buffer.append(audio_chunk)
+        self.last_speech_time = current_time
+        self.last_chunk_time = current_time
 
-            # Long pause: treat as end of utterance, process as final message
-            if silence_time > self.long_silence_duration:
-                print(f"[DEBUG] Long pause detected! silence_time={silence_time:.2f}s")
-                self.is_recording = False
-                with self.buffer_lock:
-                    if self.current_buffer:
-                        # Only process audio that came AFTER the last partial
-                        # (prevents duplicate transcription)
-                        remaining_chunks = list(self.current_buffer)[
-                            self.last_partial_index :
-                        ]
-                        if remaining_chunks:
-                            final_audio = np.concatenate(remaining_chunks)
-                        else:
-                            final_audio = None
-                        self.current_buffer.clear()
-                        self.last_partial_index = 0
-                    else:
-                        final_audio = None
+    def _handle_silence(self, current_time):
+        """Handle logic when silence is detected in the audio chunk."""
+        chunk_time = current_time - self.last_chunk_time
+        silence_time = current_time - self.last_speech_time
 
-                # Always start a thread for final message, even if no new audio (ensures queue is flushed)
-                if final_audio is not None:
-                    threading.Thread(
-                        target=self._process_final_message,
-                        args=(final_audio,),
-                        daemon=True,
-                    ).start()
+        # Short pause: process a partial (non-blocking, keeps UI responsive)
+        if chunk_time > self.short_silence_duration and len(self.current_buffer) > 0:
+            self.safe_process_current_buffer()
+            self.last_chunk_time = current_time
+
+        # Long pause: treat as end of utterance, process as final message
+        if silence_time > self.long_silence_duration:
+            print(f"[DEBUG] Long pause detected! silence_time={silence_time:.2f}s")
+            self.is_recording = False
+            final_audio = self._get_final_audio()
+            # Always start a thread for final message, even if no new audio (ensures queue is flushed)
+            if final_audio is not None:
+                threading.Thread(
+                    target=self._process_final_message,
+                    args=(final_audio,),
+                    daemon=True,
+                ).start()
+            else:
+                # Still need to send the message with just partials
+                threading.Thread(
+                    target=self._process_final_message,
+                    args=(np.array([]),),
+                    daemon=True,
+                ).start()
+
+    def _get_final_audio(self):
+        """Extracts the remaining audio after the last partial for final transcription."""
+        with self.buffer_lock:
+            if self.current_buffer:
+                remaining_chunks = list(self.current_buffer)[self.last_partial_index:]
+                if remaining_chunks:
+                    final_audio = np.concatenate(remaining_chunks)
                 else:
-                    # Still need to send the message with just partials
-                    threading.Thread(
-                        target=self._process_final_message,
-                        args=(np.array([]),),
-                        daemon=True,
-                    ).start()
+                    final_audio = None
+                self.current_buffer.clear()
+                self.last_partial_index = 0
+            else:
+                final_audio = None
+        return final_audio
 
     def start_stream(self):
         """
@@ -243,31 +311,47 @@ class StreamingSTT:
             while True:
                 time.sleep(0.1)
 
-
 def main():
-    """
-    Entry point: starts the streaming STT and prints messages from the queue.
-    """
-
-    stt = StreamingSTT(model_size="small")
-    print("Starting transcription. Speak into your microphone...")
-
-    # Start the audio stream in a background thread so the main thread can process messages
-    threading.Thread(target=stt.start_stream, daemon=True).start()
-
+    # Load the model once
+    whisper_model_size = "small"
+    whisper_model = WhisperModel(
+        f"whisper-models/models--Systran--faster-whisper-{whisper_model_size}",
+        device="cpu",
+        compute_type="int8"
+    )
+    stt = StreamingSTT(model=whisper_model)
+    activator = WakeWordActivation()
+    stt_thread = threading.Thread(target=stt.start_stream, daemon=True)
+    stt_thread.start()
     try:
         while True:
-            # TODO often Thank you. What noise is interpreted as thank you?
-            time.sleep(0.05)  # Non-blocking sleep
-            # Consume messages from queue without blocking
-            if stt.full_message_queue:
-                msg = stt.full_message_queue.popleft()
-                print("\n" + "=" * 50)
-                print("[QUEUE] Message received:")
-                print("[QUEUE MESSAGE]", msg)
-                print("=" * 50 + "\n")
+            activator.wait_for_wake()
+            print("Starting transcription. Speak into your microphone...")
+            stt.is_recording = True # Activate the transcription via flag
+            # Update the last speech times to now
+            now = time.time()
+            stt.last_speech_time = now
+            stt.last_chunk_time = now
+            while True:
+                try:
+                    time.sleep(0.05)
+                    if stt.full_message_queue:
+                        msg = stt.full_message_queue.popleft()
+                        print("\n" + "=" * 50)
+                        print("[QUEUE] Message received:")
+                        print("[QUEUE MESSAGE]", msg)
+                        print("=" * 50 + "\n")
+                        stt.is_recording = False
+                        break
+                except KeyboardInterrupt:
+                    print("Stopping transcription after next wake word...")
+                    stt.is_recording = False
+                    # After breaking, will return to wait_for_wake, then exit
+                    raise
     except KeyboardInterrupt:
         print("Stopping transcription...")
+    finally:
+        activator.stop()
 
 
 if __name__ == "__main__":
