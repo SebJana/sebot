@@ -14,7 +14,7 @@ load_dotenv()
 
 # TODO input audio into the file from the outside (so it is able to run in docker)
 # Wake word gate using Porcupine
-# Upon not speaking to at start keep listening for X seconds till abort, dont go into long pause and end 
+# TODO fix Upon not speaking to at start keep listening for X seconds till abort, dont go into long pause and end (bot gets stuck in that mode) 
 class WakeWordActivation:
     """
     Listens for the Porcupine wake word in a background thread and sets a flag when detected.

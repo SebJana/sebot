@@ -1,7 +1,7 @@
 import threading
 import time
 from streaming_stt import WhisperModel, WakeWordActivation, StreamingSTT
-from ai_api import classification
+from llm.api import classification, conversation
 from web_search import run_web_search
 import json
 
@@ -36,7 +36,7 @@ def process_queue_message(msg: str, stt: StreamingSTT):
             parsed = json.loads(result)
             print("[CLASSIFICATION]", json.dumps(parsed, indent=2, ensure_ascii=False))
 
-            web_search_output = run_web_search(parsed)
+            # Is classification the proper JSON return format?
             if isinstance(parsed, dict):
                 intent = parsed.get("intent") or {}
                 category = intent.get("category")
@@ -48,6 +48,33 @@ def process_queue_message(msg: str, stt: StreamingSTT):
                     print("[WEB SEARCH PROMPT]", web_search_output.get("prompt"))
                     print("[WIKI EXCERPT]", web_search_output.get("wiki"))
                     print("[RESULTS]", "\n".join(web_search_output.get("results", [])))
+                
+                # Build the prompt to send to the LLM safely
+                corrected = parsed.get("corrected_text") or ""
+                try:
+                    is_unchanged = isinstance(corrected, str) and corrected.lower() == "unchanged"
+                except Exception:
+                    is_unchanged = False
+
+                if is_unchanged:
+                    llm_prompt = msg
+                elif isinstance(corrected, str) and corrected:
+                    llm_prompt = corrected
+                else:
+                    llm_prompt = msg
+
+                # Prepare additional_data as a dict
+                additional_data = parsed.get("additional_data") or {}
+                # Attach web search results if available
+                if 'web_search_output' in locals() and web_search_output:
+                    additional_data = additional_data or {}
+                    additional_data.setdefault("wiki", web_search_output.get("wiki", ""))
+                    additional_data.setdefault("recent_searches", web_search_output.get("results", []))
+
+                answer = conversation(prompt=llm_prompt, additional_data=additional_data)
+                print("[LLM ANSWER]", answer)
+                    
+                
         except Exception:
             # If not valid JSON, just print raw
             print("[CLASSIFICATION RAW]", result)
