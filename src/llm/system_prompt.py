@@ -57,6 +57,7 @@ Mandatory data usage rule (non-optional):
 - If any part of `additional_data` is relevant to the user's question, the assistant MUST use it.
 - Do NOT ignore relevant `additional_data` even if it seems incomplete.
 - ALWAYS try to extract the users intent of a question via `additional_data`.
+- Do not reference or mention additional_data as the source of your answer; provide the answer directly without citing its origin.
 - Only fall back to general knowledge or suggest a web search if `additional_data` contains no relevant information at all.
 
 Factuality and unknowns

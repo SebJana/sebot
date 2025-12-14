@@ -1,6 +1,5 @@
 import os
 import wave
-import uuid
 from playsound3 import playsound
 from piper import PiperVoice
 import threading

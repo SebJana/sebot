@@ -2,6 +2,7 @@ import threading
 import time
 from streaming_stt import WhisperModel, WakeWordActivation, StreamingSTT
 from llm.api import classification, conversation
+from sound import play_thinking, stop_thinking_sound
 from web_search import run_web_search
 from tts import speak
 import json
@@ -31,6 +32,10 @@ def process_queue_message(msg: str, stt: StreamingSTT):
     print("\n" + "=" * 50)
     print("[QUEUE] Message received:")
     print("[QUEUE MESSAGE]", msg)
+    
+    # Start thinking sound immediately
+    play_thinking()
+    
     try:
         result = classification(msg)
         try:
@@ -74,6 +79,9 @@ def process_queue_message(msg: str, stt: StreamingSTT):
 
                 answer = conversation(prompt=llm_prompt, additional_data=additional_data)
                 print("[LLM ANSWER]", answer)
+                
+                # Stop thinking sound before playing the LLM answer
+                stop_thinking_sound()
                 speak(answer, voice="en_US", wait=False)
                     
         except Exception:
@@ -116,11 +124,15 @@ def main():
             try:
                 while True:
                     time.sleep(0.05)
+                    # TODO fix sometimes "us" of "Atlas" is being transcribed
+                    # TODO fix sometimes "Thank you." is transcribed multiple times (possibly from keyboard noise)
                     if stt.full_message_queue:
                         reset_stt_flags(stt)
                         # Extract latest message
                         msg = stt.full_message_queue.popleft()
                         # Process the message and stop recording afterwards
+                        # TODO "wake word, stop" needs to work and stop all running tasks and actions
+                        # TODO Upon saying wake word, abort all current running tasks and actions
                         process_queue_message(msg, stt)
                         break
             except KeyboardInterrupt:

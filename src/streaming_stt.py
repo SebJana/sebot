@@ -8,6 +8,7 @@ import os
 import pvporcupine
 import pyaudio
 import struct
+from sound import play_wake_detected, play_wake_off
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -56,6 +57,7 @@ class WakeWordActivation:
                 )
                 keyword_index = porcupine.process(pcm)
                 if keyword_index >= 0:
+                    play_wake_detected()
                     print("Wake word detected! Listening...")
                     self.detected.set()
                     self.detected.wait()
@@ -272,6 +274,7 @@ class StreamingSTT:
                 return
             else:
                 # Grace period expired, now exit and wait for wake word again
+                play_wake_off()
                 print(f"[DEBUG] No speech detected in initial {self.initial_silence_window}s, returning to wake word")
                 self.is_recording = False
                 self.in_initial_grace_period = False
