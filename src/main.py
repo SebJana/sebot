@@ -3,6 +3,7 @@ import time
 from streaming_stt import WhisperModel, WakeWordActivation, StreamingSTT
 from llm.api import classification, conversation
 from web_search import run_web_search
+from tts import speak
 import json
 
 
@@ -73,8 +74,8 @@ def process_queue_message(msg: str, stt: StreamingSTT):
 
                 answer = conversation(prompt=llm_prompt, additional_data=additional_data)
                 print("[LLM ANSWER]", answer)
+                speak(answer, voice="en_US", wait=False)
                     
-                
         except Exception:
             # If not valid JSON, just print raw
             print("[CLASSIFICATION RAW]", result)

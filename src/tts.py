@@ -1,72 +1,68 @@
-# Test script -download voice model files
-# from https://huggingface.co/rhasspy/piper-voices/tree/main
-
-import wave
-import pygame
 import os
+import wave
+import uuid
+from playsound3 import playsound
 from piper import PiperVoice
+import threading
 
-# Initialize pygame mixer
-pygame.mixer.init()
-
-# en_GB: Alba/Cori
-# de: Thorsten/Thorsten emotional für Whisper
-# en_US: Amy/Ryan
-
-german_test = "Hallo, Ich bin Sebot, wie kann ich dir helfen?"
-english_test = "Hello, I'm Sebot, how can I help you today?"
-
-# Get the project root directory (two levels up from this file)
+# Project paths
 project_root = os.path.dirname(os.path.dirname(__file__))
 audio_dir = os.path.join(project_root, "audio")
-
-# Create audio directory if it doesn't exist
 os.makedirs(audio_dir, exist_ok=True)
 
-de_voice = PiperVoice.load(os.path.join(project_root, "voices", "de", "de_DE-thorsten-medium.onnx"))
-en_US_voice = PiperVoice.load(os.path.join(project_root, "voices", "en-US", "en_US-amy-medium.onnx"))
-en_GB_voice = PiperVoice.load(os.path.join(project_root, "voices", "en-GB", "en_GB-alba-medium.onnx"))
+# Cache for loaded voices
+_voice_cache = {}
+_voice_cache_lock = threading.Lock()
 
-# Generate speech and save to WAV file
-with wave.open(os.path.join(audio_dir, "de.wav"), "wb") as wav_file:
-    de_voice.synthesize_wav(german_test, wav_file)
+# Map logical voice keys to relative voice file paths in the repo
+_VOICE_PATHS = {
+    "en_US": os.path.join(project_root, "voices", "en-US", "en_US-amy-medium.onnx"),
+    "en_GB": os.path.join(project_root, "voices", "en-GB", "en_GB-alba-medium.onnx"),
+    "de": os.path.join(project_root, "voices", "de", "de_DE-thorsten-medium.onnx"),
+}
 
-with wave.open(os.path.join(audio_dir, "en_US.wav"), "wb") as wav_file:
-    en_US_voice.synthesize_wav(english_test, wav_file)
+def _load_voice(key: str) -> PiperVoice:
+    """Load and cache a PiperVoice for the given key."""
+    key = key or "en_US"
+    with _voice_cache_lock:
+        if key in _voice_cache:
+            return _voice_cache[key]
 
-with wave.open(os.path.join(audio_dir, "en_GB.wav"), "wb") as wav_file:
-    en_GB_voice.synthesize_wav(english_test, wav_file)
+        path = _VOICE_PATHS.get(key)
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError(f"Voice for key '{key}' not found at {path}")
 
-print("Audio generated. Playing...")
+        voice = PiperVoice.load(path)
+        _voice_cache[key] = voice
+        return voice
 
+def synthesize_to_wav(text: str, voice_key: str, out_path: str):
+    """Synthesize text to a WAV file at out_path using the selected voice."""
+    voice = _load_voice(voice_key)
+    with wave.open(out_path, "wb") as wav_file:
+        voice.synthesize_wav(text, wav_file)
 
-# Play German audio first
-print("Playing German audio...")
-pygame.mixer.music.load(os.path.join(audio_dir, "de.wav"))
-pygame.mixer.music.play()
+def play_wav(path: str, wait: bool = True):
+    """
+    Play a WAV file on the default audio device using playsound3.
 
-# Wait for German audio to finish
-while pygame.mixer.music.get_busy():
-    pygame.time.wait(100)
+    If wait is False, playback happens in the background.
+    """
+    playsound(path, block=wait)
 
-# Play American audio second
-print("Playing American audio...")
-pygame.mixer.music.load(os.path.join(audio_dir, "en_US.wav"))
-pygame.mixer.music.play()
+def speak(text: str, voice: str = "en_US", wait: bool = True) -> str:
+    """
+    Synthesize `text` using `voice` and play it on the default device.
+    If wait is False, playback happens in the background.
 
-# Wait for American audio to finish
-while pygame.mixer.music.get_busy():
-    pygame.time.wait(100)
+    Returns the path to the generated WAV file.
+    """
+    fname = "tts_recent.wav"
+    out_path = os.path.join(audio_dir, fname)
 
-# Play British audio second
-print("Playing British audio...")
-pygame.mixer.music.load(os.path.join(audio_dir, "en_GB.wav"))
-pygame.mixer.music.play()
+    synthesize_to_wav(text, voice, out_path)
+    play_wav(out_path, wait=wait)
 
-# Wait for British audio to finish
-while pygame.mixer.music.get_busy():
-    pygame.time.wait(100)
+    return out_path
 
-
-print("All playback finished.")
-pygame.mixer.music.play()
+__all__ = ["speak", "play_wav"]

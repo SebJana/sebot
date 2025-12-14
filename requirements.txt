@@ -1,5 +1,5 @@
 piper-tts
-pygame
+playsound3
 faster-whisper
 sounddevice
 numpy
