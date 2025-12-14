@@ -31,7 +31,7 @@ def parse_date_only(dt_str: str) -> date:
     """
     return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).date()
 
-# TODO cache the calender 
+# TODO cache the calendar 
 def get_nfl_season_and_week(input_date: str):
     """Return the NFL season type and week for a given date.
 
