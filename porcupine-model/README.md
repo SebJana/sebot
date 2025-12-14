@@ -1,7 +1,7 @@
 
 # Porcupine Wake Word Model
 
-This folder contains custom Porcupine wake word models for use with the `wakeword.py` script.
+This folder contains custom Porcupine wake word models for use with the bot activation.
 
 ## How to Use
 

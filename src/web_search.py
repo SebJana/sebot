@@ -27,61 +27,60 @@ For expected workload with bigger context requirement, consider adding a tool ca
 from ddgs import DDGS
 import wikipedia
 
-
 def get_wikipedia_info(search_prompt):
-        """Return a short excerpt from the top Wikipedia page for the prompt.
+    """Return a short excerpt from the top Wikipedia page for the prompt.
 
-        Behaviour:
-        - Uses the `wikipedia` package to search for the query and fetch the top
-            result's page content.
-        - Returns only the first ~2000 characters to keep the excerpt small and
-            avoid sending large documents to downstream systems.
-        - Any exception (no results, disambiguation, network error) results in an
-            empty string so callers can handle absence of wiki text gracefully.
-        """
+    Behaviour:
+    - Uses the `wikipedia` package to search for the query and fetch the top
+        result's page content.
+    - Returns only the first ~2000 characters to keep the excerpt small and
+        avoid sending large documents to downstream systems.
+    - Any exception (no results, disambiguation, network error) results in an
+        empty string so callers can handle absence of wiki text gracefully.
+    """
 
-        # Get search results (may be empty)
-        results = wikipedia.search(search_prompt)
+    # Get search results (may be empty)
+    results = wikipedia.search(search_prompt)
 
-        try:
-                # Fetch the top result's page content and return a short excerpt.
-                # We deliberately slice the content to limit token usage downstream.
-                page = wikipedia.page(results[0])
-                return page.content[:2000]
-        except Exception:
-                # Return empty text upon any error (robust failure mode)
-                return ""
-
-
-def extract_relevant_text(search_prompt, max_results=10):
-        """Return a list of lightweight "peek" strings for search results.
-
-        For each result we only keep:
-        - Title
-        - Short snippet/body provided by the DDGS search response
-
-        This intentionally avoids fetching and returning full page HTML/text.
-        """
-
-        # DDGS.text returns an iterator/generator; we request a limited number of
-        # results to keep response size predictable.
-        results = DDGS().text(search_prompt, max_results=max_results)
-
-        relevant_text = []
-
-        for r in results:
-                # DDGS result is a small dict with keys like 'href', 'title', 'body'.
-                # url = r.get('href')
-                title = r.get('title', '')
-                snippet = r.get('body', '')
-
-                text = f"Title: {title}\nSnippet: {snippet}"
-                relevant_text.append(text)
-
-        return relevant_text
+    try:
+        # Fetch the top result's page content and return a short excerpt.
+        # We deliberately slice the content to limit token usage downstream.
+        page = wikipedia.page(results[0])
+        return page.content[:2500]
+    except Exception:
+        # Return empty text upon any error (robust failure mode)
+        return ""
 
 
-def run_web_search(prompt: str, category: str = "web_search", max_results: int = 12):
+def get_relevant_webtext(search_prompt, max_results=10):
+    """Return a list of lightweight "peek" strings for search results.
+
+    For each result we only keep:
+    - Title
+    - Short snippet/body provided by the DDGS search response
+
+    This intentionally avoids fetching and returning full page HTML/text.
+    """
+
+    # DDGS.text returns an iterator/generator; request a limited number of
+    # results to keep response size predictable.
+    results = DDGS().text(search_prompt, max_results=max_results)
+
+    relevant_text = []
+
+    for r in results:
+        # DDGS result is a small dict with keys like 'href', 'title', 'body'.
+        # url = r.get('href')
+        title = r.get("title", "")
+        snippet = r.get("body", "")
+
+        text = f"Title: {title}\nSnippet: {snippet}"
+        relevant_text.append(text)
+
+    return relevant_text
+
+
+def run_web_search(prompt: str, category: str = "web_search", max_results: int = 15):
     """Run a lightweight web search and optionally a short Wikipedia lookup.
 
     Args:
@@ -103,7 +102,7 @@ def run_web_search(prompt: str, category: str = "web_search", max_results: int =
     if category == "web_search_with_wiki":
         wiki_text = get_wikipedia_info(prompt)
 
-    results = extract_relevant_text(prompt, max_results=max_results)
+    results = get_relevant_webtext(prompt, max_results=max_results)
 
     return {
         "prompt": prompt,
@@ -111,6 +110,9 @@ def run_web_search(prompt: str, category: str = "web_search", max_results: int =
         "results": results,
     }
 
+
 # Example usage (kept here for demo / development only)
 if __name__ == "__main__":
-    run_web_search("Brad Pitt new girlfriend")
+    res = run_web_search("NFL results last week")
+    print(res.get("wiki"))
+    print(res.get("results"))
