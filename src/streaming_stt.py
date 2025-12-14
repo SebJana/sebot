@@ -11,7 +11,6 @@ import struct
 from dotenv import load_dotenv
 load_dotenv()
 
-
 # TODO input audio into the file from the outside (so it is able to run in docker)
 # Wake word gate using Porcupine
 # TODO fix Upon not speaking to at start keep listening for X seconds till abort, dont go into long pause and end (bot gets stuck in that mode) 
@@ -108,12 +107,16 @@ class StreamingSTT:
             0.5  # Minimum audio length (seconds) for valid transcription
         )
         self.short_silence_duration = 0.5  # Short pause (seconds) triggers partial message transcription
-        self.long_silence_duration = 1.25  # Long pause (seconds) triggers final message
+        self.long_silence_duration = 2.0  # Long pause (seconds) triggers final message
+        self.initial_silence_window = 5.0 # After this pause upon activation go back to wake word listening
+
 
         # State variables for speech detection and timing
         self.is_recording = False
-        self.last_speech_time = time.time()  # Last time speech was detected
-        self.last_chunk_time = time.time()  # Last time a chunk was processed
+        self.recording_start_time = None
+        self.last_speech_time = None  # Last time speech was detected
+        self.last_chunk_time = None  # Last time a chunk was processed
+        self.in_initial_grace_period = False  # Flag to track if we're in the grace period at recording start
 
         # List of threads currently processing partials
         self.partial_threads = []
@@ -131,8 +134,10 @@ class StreamingSTT:
         # Calculate root mean square (RMS) and peak amplitude
         rms = np.sqrt(np.mean(audio_chunk**2))
         peak = np.max(np.abs(audio_chunk))
+        has_speech = rms > self.silence_threshold or peak > self.silence_threshold * 2
+
         # Return True if either RMS or peak exceeds threshold (robust to both loud and soft speech)
-        return rms > self.silence_threshold or peak > self.silence_threshold * 2
+        return has_speech
 
     def transcribe_buffer(self, audio_data):
         """
@@ -152,10 +157,7 @@ class StreamingSTT:
                 vad_filter=False,
                 condition_on_previous_text=False,
                 no_speech_threshold=0.6,
-                # TODO fix language to english for better performance?
-                # German is being translated, but what is the accuracy like?
-                # Rather have slower but accurate answers with sebot
-                language="en",  # Let model decide which language its picking up
+                language="en",
             )
             # Join all non-empty segment texts
             return " ".join(seg.text.strip() for seg in segments if seg.text.strip())
@@ -246,27 +248,51 @@ class StreamingSTT:
 
     def _handle_speech_detected(self, audio_chunk, current_time):
         """Handle logic when speech is detected in the audio chunk."""
+        # Exit grace period when real speech is detected
+        if self.in_initial_grace_period:
+            self.in_initial_grace_period = False
+        
         with self.buffer_lock:
             self.current_buffer.append(audio_chunk)
         self.last_speech_time = current_time
         self.last_chunk_time = current_time
 
     def _handle_silence(self, current_time):
-        """Handle logic when silence is detected in the audio chunk."""
+        # Ensure last_chunk_time is set
+        if self.last_chunk_time is None:
+            self.last_chunk_time = current_time
+            
         chunk_time = current_time - self.last_chunk_time
+
+        # Initial grace period: ignore long pauses at start of recording
+        if self.in_initial_grace_period:
+            initial_silence = current_time - self.recording_start_time
+            if initial_silence < self.initial_silence_window:
+                # Still within initial grace period, do nothing
+                return
+            else:
+                # Grace period expired, now exit and wait for wake word again
+                print(f"[DEBUG] No speech detected in initial {self.initial_silence_window}s, returning to wake word")
+                self.is_recording = False
+                self.in_initial_grace_period = False
+                return
+
+        # Only proceed with silence checks if speech has been detected
+        if self.last_speech_time is None:
+            return
+            
         silence_time = current_time - self.last_speech_time
 
-        # Short pause: process a partial (non-blocking, keeps UI responsive)
+        # Short pause: process a partial (non-blocking)
         if chunk_time > self.short_silence_duration and len(self.current_buffer) > 0:
             self.safe_process_current_buffer()
             self.last_chunk_time = current_time
 
-        # Long pause: treat as end of utterance, process as final message
+        # Long pause: treat as end of utterance
         if silence_time > self.long_silence_duration:
             print(f"[DEBUG] Long pause detected! silence_time={silence_time:.2f}s")
             self.is_recording = False
             final_audio = self._get_final_audio()
-            # Always start a thread for final message, even if no new audio (ensures queue is flushed)
             if final_audio is not None:
                 threading.Thread(
                     target=self._process_final_message,
@@ -274,7 +300,6 @@ class StreamingSTT:
                     daemon=True,
                 ).start()
             else:
-                # Still need to send the message with just partials
                 threading.Thread(
                     target=self._process_final_message,
                     args=(np.array([]),),

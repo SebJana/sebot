@@ -85,6 +85,14 @@ def process_queue_message(msg: str, stt: StreamingSTT):
     stt.is_recording = False
     return True
 
+def reset_stt_flags(stt: StreamingSTT):
+    # Reset all flags
+    stt.is_recording = False
+    stt.recording_start_time = None
+    stt.last_speech_time = None
+    stt.last_chunk_time = None
+    stt.in_initial_grace_period = False
+
 
 def main():
     # Setup services and start background threads
@@ -96,10 +104,12 @@ def main():
             activator.wait_for_wake()
             print("Starting transcription. Speak into your microphone...")
             stt.is_recording = True  # Activate the transcription via flag
+            stt.in_initial_grace_period = True  # Enable grace period for this recording session
 
             # Update the last speech times to now
             now = time.time()
-            stt.last_speech_time = now
+            stt.recording_start_time = now
+            stt.last_speech_time = None  # Reset to None so grace period works
             stt.last_chunk_time = now
 
             # Wait for the transcribed message to appear in the queue
@@ -107,13 +117,15 @@ def main():
                 while True:
                     time.sleep(0.05)
                     if stt.full_message_queue:
+                        reset_stt_flags(stt)
+                        # Extract latest message
                         msg = stt.full_message_queue.popleft()
                         # Process the message and stop recording afterwards
                         process_queue_message(msg, stt)
                         break
             except KeyboardInterrupt:
                 print("Stopping transcription after next wake word...")
-                stt.is_recording = False
+                reset_stt_flags(stt)
                 raise
     except KeyboardInterrupt:
         print("Stopping transcription...")
